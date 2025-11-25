@@ -89,6 +89,7 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 	private ScanResult classGraphScanResult = null;
 	private GroovyClassLoader classLoader = null;
 	private URI previousContext = null;
+    private final Object lock = new Object();
 
 	public GroovyServices(ICompilationUnitFactory factory) {
 		compilationUnitFactory = factory;
@@ -96,7 +97,9 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 
 	public void setWorkspaceRoot(Path workspaceRoot) {
 		this.workspaceRoot = workspaceRoot;
-		createOrUpdateCompilationUnit();
+        synchronized (lock) {
+		    createOrUpdateCompilationUnit();
+        }
 	}
 
 	@Override
@@ -108,23 +111,29 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 
 	@Override
 	public void didOpen(DidOpenTextDocumentParams params) {
-		fileContentsTracker.didOpen(params);
-		URI uri = URI.create(params.getTextDocument().getUri());
-		compileAndVisitAST(uri);
+        synchronized (lock) {
+            fileContentsTracker.didOpen(params);
+            URI uri = URI.create(params.getTextDocument().getUri());
+            compileAndVisitAST(uri);
+        }
 	}
 
 	@Override
 	public void didChange(DidChangeTextDocumentParams params) {
-		fileContentsTracker.didChange(params);
-		URI uri = URI.create(params.getTextDocument().getUri());
-		compileAndVisitAST(uri);
+        synchronized (lock) {
+            fileContentsTracker.didChange(params);
+            URI uri = URI.create(params.getTextDocument().getUri());
+            compileAndVisitAST(uri);
+        }
 	}
 
 	@Override
 	public void didClose(DidCloseTextDocumentParams params) {
-		fileContentsTracker.didClose(params);
-		URI uri = URI.create(params.getTextDocument().getUri());
-		compileAndVisitAST(uri);
+        synchronized (lock) {
+            fileContentsTracker.didClose(params);
+            URI uri = URI.create(params.getTextDocument().getUri());
+            compileAndVisitAST(uri);
+        }
 	}
 
 	@Override
@@ -155,13 +164,15 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 	}
 
     void updateClasspath(List<String> classpathList) {
-        if (!classpathList.equals(compilationUnitFactory.getAdditionalClasspathList())) {
-            compilationUnitFactory.setAdditionalClasspathList(classpathList);
+        synchronized (lock) {
+            if (!classpathList.equals(compilationUnitFactory.getAdditionalClasspathList())) {
+                compilationUnitFactory.setAdditionalClasspathList(classpathList);
 
-            createOrUpdateCompilationUnit();
-            compile();
-            visitAST();
-            previousContext = null;
+                createOrUpdateCompilationUnit();
+                compile();
+                visitAST();
+                previousContext = null;
+            }
         }
     }
 
@@ -185,66 +196,70 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 
 	@Override
 	public CompletableFuture<Hover> hover(HoverParams params) {
-		URI uri = URI.create(params.getTextDocument().getUri());
-		recompileIfContextChanged(uri);
+        synchronized (lock) {
+            URI uri = URI.create(params.getTextDocument().getUri());
+            recompileIfContextChanged(uri);
 
-		HoverProvider provider = new HoverProvider(astVisitor);
-		return provider.provideHover(params.getTextDocument(), params.getPosition());
+            HoverProvider provider = new HoverProvider(astVisitor);
+            return provider.provideHover(params.getTextDocument(), params.getPosition());
+        }
 	}
 
 	@Override
 	public CompletableFuture<Either<List<CompletionItem>, CompletionList>> completion(CompletionParams params) {
-		TextDocumentIdentifier textDocument = params.getTextDocument();
-		Position position = params.getPosition();
-		URI uri = URI.create(textDocument.getUri());
+        synchronized (lock) {
+            TextDocumentIdentifier textDocument = params.getTextDocument();
+            Position position = params.getPosition();
+            URI uri = URI.create(textDocument.getUri());
 
-		recompileIfContextChanged(uri);
+            recompileIfContextChanged(uri);
 
-		String originalSource = null;
-		ASTNode offsetNode = astVisitor.getNodeAtLineAndColumn(uri, position.getLine(), position.getCharacter());
-		if (offsetNode == null) {
-			originalSource = fileContentsTracker.getContents(uri);
-			VersionedTextDocumentIdentifier versionedTextDocument = new VersionedTextDocumentIdentifier(
-					textDocument.getUri(), 1);
-			int offset = Positions.getOffset(originalSource, position);
-			String lineBeforeOffset = originalSource.substring(offset - position.getCharacter(), offset);
-			Matcher matcher = PATTERN_CONSTRUCTOR_CALL.matcher(lineBeforeOffset);
-			TextDocumentContentChangeEvent changeEvent = null;
-			if (matcher.matches()) {
-				changeEvent = new TextDocumentContentChangeEvent(new Range(position, position), 0, "a()");
-			} else {
-				changeEvent = new TextDocumentContentChangeEvent(new Range(position, position), 0, "a");
-			}
-			DidChangeTextDocumentParams didChangeParams = new DidChangeTextDocumentParams(versionedTextDocument,
-					Collections.singletonList(changeEvent));
-			// if the offset node is null, there is probably a syntax error.
-			// a completion request is usually triggered by the . character, and
-			// if there is no property name after the dot, it will cause a syntax
-			// error.
-			// this hack adds a placeholder property name in the hopes that it
-			// will correctly create a PropertyExpression to use for completion.
-			// we'll restore the original text after we're done handling the
-			// completion request.
-			didChange(didChangeParams);
-		}
+            String originalSource = null;
+            ASTNode offsetNode = astVisitor.getNodeAtLineAndColumn(uri, position.getLine(), position.getCharacter());
+            if (offsetNode == null) {
+                originalSource = fileContentsTracker.getContents(uri);
+                VersionedTextDocumentIdentifier versionedTextDocument = new VersionedTextDocumentIdentifier(
+                        textDocument.getUri(), 1);
+                int offset = Positions.getOffset(originalSource, position);
+                String lineBeforeOffset = originalSource.substring(offset - position.getCharacter(), offset);
+                Matcher matcher = PATTERN_CONSTRUCTOR_CALL.matcher(lineBeforeOffset);
+                TextDocumentContentChangeEvent changeEvent = null;
+                if (matcher.matches()) {
+                    changeEvent = new TextDocumentContentChangeEvent(new Range(position, position), 0, "a()");
+                } else {
+                    changeEvent = new TextDocumentContentChangeEvent(new Range(position, position), 0, "a");
+                }
+                DidChangeTextDocumentParams didChangeParams = new DidChangeTextDocumentParams(versionedTextDocument,
+                        Collections.singletonList(changeEvent));
+                // if the offset node is null, there is probably a syntax error.
+                // a completion request is usually triggered by the . character, and
+                // if there is no property name after the dot, it will cause a syntax
+                // error.
+                // this hack adds a placeholder property name in the hopes that it
+                // will correctly create a PropertyExpression to use for completion.
+                // we'll restore the original text after we're done handling the
+                // completion request.
+                didChange(didChangeParams);
+            }
 
-		CompletableFuture<Either<List<CompletionItem>, CompletionList>> result = null;
-		try {
-			CompletionProvider provider = new CompletionProvider(astVisitor, classGraphScanResult);
-			result = provider.provideCompletion(params.getTextDocument(), params.getPosition(), params.getContext());
-		} finally {
-			if (originalSource != null) {
-				VersionedTextDocumentIdentifier versionedTextDocument = new VersionedTextDocumentIdentifier(
-						textDocument.getUri(), 1);
-				TextDocumentContentChangeEvent changeEvent = new TextDocumentContentChangeEvent(null, 0,
-						originalSource);
-				DidChangeTextDocumentParams didChangeParams = new DidChangeTextDocumentParams(versionedTextDocument,
-						Collections.singletonList(changeEvent));
-				didChange(didChangeParams);
-			}
-		}
+            CompletableFuture<Either<List<CompletionItem>, CompletionList>> result = null;
+            try {
+                CompletionProvider provider = new CompletionProvider(astVisitor, classGraphScanResult);
+                result = provider.provideCompletion(params.getTextDocument(), params.getPosition(), params.getContext());
+            } finally {
+                if (originalSource != null) {
+                    VersionedTextDocumentIdentifier versionedTextDocument = new VersionedTextDocumentIdentifier(
+                            textDocument.getUri(), 1);
+                    TextDocumentContentChangeEvent changeEvent = new TextDocumentContentChangeEvent(null, 0,
+                            originalSource);
+                    DidChangeTextDocumentParams didChangeParams = new DidChangeTextDocumentParams(versionedTextDocument,
+                            Collections.singletonList(changeEvent));
+                    didChange(didChangeParams);
+                }
+            }
 
-		return result;
+            return result;
+        }
 	}
 
 	@Override
@@ -305,45 +320,55 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 	@Override
 	public CompletableFuture<Either<List<? extends Location>, List<? extends LocationLink>>> typeDefinition(
 			TypeDefinitionParams params) {
-		URI uri = URI.create(params.getTextDocument().getUri());
-		recompileIfContextChanged(uri);
+        synchronized (lock) {
+            URI uri = URI.create(params.getTextDocument().getUri());
+            recompileIfContextChanged(uri);
 
-		TypeDefinitionProvider provider = new TypeDefinitionProvider(astVisitor);
-		return provider.provideTypeDefinition(params.getTextDocument(), params.getPosition());
+            TypeDefinitionProvider provider = new TypeDefinitionProvider(astVisitor);
+            return provider.provideTypeDefinition(params.getTextDocument(), params.getPosition());
+        }
 	}
 
 	@Override
 	public CompletableFuture<List<? extends Location>> references(ReferenceParams params) {
-		URI uri = URI.create(params.getTextDocument().getUri());
-		recompileIfContextChanged(uri);
+        synchronized (lock) {
+            URI uri = URI.create(params.getTextDocument().getUri());
+            recompileIfContextChanged(uri);
 
-		ReferenceProvider provider = new ReferenceProvider(astVisitor);
-		return provider.provideReferences(params.getTextDocument(), params.getPosition());
+            ReferenceProvider provider = new ReferenceProvider(astVisitor);
+            return provider.provideReferences(params.getTextDocument(), params.getPosition());
+        }
 	}
 
 	@Override
 	public CompletableFuture<List<Either<SymbolInformation, DocumentSymbol>>> documentSymbol(
 			DocumentSymbolParams params) {
-		URI uri = URI.create(params.getTextDocument().getUri());
-		recompileIfContextChanged(uri);
+        synchronized (lock) {
+            URI uri = URI.create(params.getTextDocument().getUri());
+            recompileIfContextChanged(uri);
 
-		DocumentSymbolProvider provider = new DocumentSymbolProvider(astVisitor);
-		return provider.provideDocumentSymbols(params.getTextDocument());
+            DocumentSymbolProvider provider = new DocumentSymbolProvider(astVisitor);
+            return provider.provideDocumentSymbols(params.getTextDocument());
+        }
 	}
 
 	@Override
 	public CompletableFuture<Either<List<? extends SymbolInformation>, List<? extends WorkspaceSymbol>>> symbol(WorkspaceSymbolParams params) {
-		WorkspaceSymbolProvider provider = new WorkspaceSymbolProvider(astVisitor);
-		return provider.provideWorkspaceSymbols(params.getQuery()).thenApply(Either::forLeft);
+        synchronized (lock) {
+            WorkspaceSymbolProvider provider = new WorkspaceSymbolProvider(astVisitor);
+            return provider.provideWorkspaceSymbols(params.getQuery()).thenApply(Either::forLeft);
+        }
 	}
 
 	@Override
 	public CompletableFuture<WorkspaceEdit> rename(RenameParams params) {
-		URI uri = URI.create(params.getTextDocument().getUri());
-		recompileIfContextChanged(uri);
+        synchronized (lock) {
+            URI uri = URI.create(params.getTextDocument().getUri());
+            recompileIfContextChanged(uri);
 
-		RenameProvider provider = new RenameProvider(astVisitor, fileContentsTracker);
-		return provider.provideRename(params);
+            RenameProvider provider = new RenameProvider(astVisitor, fileContentsTracker);
+            return provider.provideRename(params);
+        }
 	}
 
 	// --- INTERNAL
@@ -411,23 +436,27 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 	}
 
 	protected void recompileIfContextChanged(URI newContext) {
-		if (previousContext == null || previousContext.equals(newContext)) {
-			return;
-		}
-		fileContentsTracker.forceChanged(newContext);
-		compileAndVisitAST(newContext);
+        synchronized (lock) {
+            if (previousContext == null || previousContext.equals(newContext)) {
+                return;
+            }
+            fileContentsTracker.forceChanged(newContext);
+            compileAndVisitAST(newContext);
+        }
 	}
 
 	private void compileAndVisitAST(URI contextURI) {
-		Set<URI> uris = Collections.singleton(contextURI);
-		boolean isSameUnit = createOrUpdateCompilationUnit();
-		compile();
-		if (isSameUnit) {
-			visitAST(uris);
-		} else {
-			visitAST();
-		}
-		previousContext = contextURI;
+        synchronized (lock) {
+            Set<URI> uris = Collections.singleton(contextURI);
+            boolean isSameUnit = createOrUpdateCompilationUnit();
+            compile();
+            if (isSameUnit) {
+                visitAST(uris);
+            } else {
+                visitAST();
+            }
+            previousContext = contextURI;
+        }
 	}
 
 	private void compile() {
@@ -438,7 +467,7 @@ public class GroovyServices implements TextDocumentService, WorkspaceService, La
 			// AST is completely built after the canonicalization phase
 			// for code intelligence, we shouldn't need to go further
 			// http://groovy-lang.org/metaprogramming.html#_compilation_phases_guide
-			compilationUnit.compile(Phases.CANONICALIZATION);
+				compilationUnit.compile(Phases.CANONICALIZATION);
 		} catch (CompilationFailedException e) {
 			// ignore
 		} catch (GroovyBugError e) {

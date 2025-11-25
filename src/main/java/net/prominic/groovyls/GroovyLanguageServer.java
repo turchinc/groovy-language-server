@@ -52,7 +52,7 @@ public class GroovyLanguageServer implements LanguageServer, LanguageClientAware
     private static final Logger logger = LoggerFactory.getLogger(GroovyLanguageServer.class);
     private LanguageClient client;
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, Exception {
         if (args.length > 0 && "--tcp".equals(args[0])) {
             int port = 5007;
             if (args.length > 1) {
@@ -74,6 +74,9 @@ public class GroovyLanguageServer implements LanguageServer, LanguageClientAware
                 startServer(in, out);
             }
         } else {
+            // Redirect System.out to System.err to avoid corrupting the communication channel
+            System.setOut(new PrintStream(System.err));
+
             logger.info("Groovy Language Server starting in stdio mode.");
             InputStream in = System.in;
             OutputStream out = System.out;
@@ -81,14 +84,11 @@ public class GroovyLanguageServer implements LanguageServer, LanguageClientAware
         }
     }
 
-    private static void startServer(InputStream in, OutputStream out) {
-        // Redirect System.out to System.err to avoid corrupting the communication channel
-        System.setOut(new PrintStream(System.err));
-
+    private static void startServer(InputStream in, OutputStream out) throws Exception {
         GroovyLanguageServer server = new GroovyLanguageServer();
         Launcher<LanguageClient> launcher = Launcher.createLauncher(server, LanguageClient.class, in, out);
         server.connect(launcher.getRemoteProxy());
-        launcher.startListening();
+        launcher.startListening().get();
     }
 
     private final GroovyServices groovyServices;
@@ -123,23 +123,25 @@ public class GroovyLanguageServer implements LanguageServer, LanguageClientAware
 
         List<WorkspaceFolder> folders = params.getWorkspaceFolders();
         if (folders != null) {
-            for (WorkspaceFolder folder : folders) {
-                Path folderPath = Paths.get(URI.create(folder.getUri()));
-                try {
-                    List<Path> gradleProjects = discoverGradleProjects(folderPath);
-                    for (Path gradleProject : gradleProjects) {
-                        if (client != null) {
-                            client.showMessage(new MessageParams(
-                                    MessageType.Info,
-                                    "Importing Gradle project: " + gradleProject
-                            ));
+            CompletableFuture.runAsync(() -> {
+                for (WorkspaceFolder folder : folders) {
+                    Path folderPath = Paths.get(URI.create(folder.getUri()));
+                    try {
+                        List<Path> gradleProjects = discoverGradleProjects(folderPath);
+                        for (Path gradleProject : gradleProjects) {
+                            if (client != null) {
+                                client.showMessage(new MessageParams(
+                                        MessageType.Info,
+                                        "Importing Gradle project: " + gradleProject
+                                ));
+                            }
+                            importGradleProject(gradleProject);
                         }
-                        importGradleProject(gradleProject);
+                    } catch (IOException e) {
+                        logger.error(e.getMessage(), e);
                     }
-                } catch (IOException e) {
-                    logger.error(e.getMessage(), e);
                 }
-            }
+            });
         }
 
         CompletionOptions completionOptions = new CompletionOptions(false, Arrays.asList("."));

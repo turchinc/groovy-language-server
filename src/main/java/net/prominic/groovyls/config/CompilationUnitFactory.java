@@ -74,13 +74,16 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 			classLoader = new GroovyClassLoader(ClassLoader.getSystemClassLoader().getParent(), config, true);
 		}
 
-		Set<URI> changedUris = fileContentsTracker.getChangedURIs();
 		if (compilationUnit == null) {
 			compilationUnit = new GroovyLSCompilationUnit(config, null, classLoader);
-			// we don't care about changed URIs if there's no compilation unit yet
-			changedUris = null;
 		} else {
 			compilationUnit.setClassLoader(classLoader);
+		}
+
+		// ONLY compile open files - they take precedence
+		// Remove any SourceUnits for changed URIs and re-add them
+		Set<URI> changedUris = fileContentsTracker.getChangedURIs();
+		if (!changedUris.isEmpty()) {
 			final Set<URI> urisToRemove = changedUris;
 			List<SourceUnit> sourcesToRemove = new ArrayList<>();
 			compilationUnit.iterator().forEachRemaining(sourceUnit -> {
@@ -89,25 +92,14 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 					sourcesToRemove.add(sourceUnit);
 				}
 			});
-			// if an URI has changed, we remove it from the compilation unit so
-			// that a new version can be built from the updated source file
 			compilationUnit.removeSources(sourcesToRemove);
 		}
 
-		if (workspaceRoot != null) {
-			addDirectoryToCompilationUnit(workspaceRoot, compilationUnit, fileContentsTracker, changedUris);
-		} else {
-			final Set<URI> urisToAdd = changedUris;
-			fileContentsTracker.getOpenURIs().forEach(uri -> {
-				// if we're only tracking changes, skip all files that haven't
-				// actually changed
-				if (urisToAdd != null && !urisToAdd.contains(uri)) {
-					return;
-				}
-				String contents = fileContentsTracker.getContents(uri);
-				addOpenFileToCompilationUnit(uri, contents, compilationUnit);
-			});
-		}
+		// Add open files to compilation unit
+		fileContentsTracker.getOpenURIs().forEach(uri -> {
+			String contents = fileContentsTracker.getContents(uri);
+			addOpenFileToCompilationUnit(uri, contents, compilationUnit);
+		});
 
 		return compilationUnit;
 	}
@@ -201,8 +193,11 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 	}
 
 	protected void addOpenFileToCompilationUnit(URI uri, String contents, GroovyLSCompilationUnit compilationUnit) {
-		Path filePath = Paths.get(uri);
-		SourceUnit sourceUnit = new SourceUnit(filePath.toString(),
+		// Create a simple name without file:// scheme to avoid parser confusion
+		// The StringReaderSourceWithURI will provide the actual content
+		String sourceUnitName = "file:" + uri.getPath();
+		
+		SourceUnit sourceUnit = new SourceUnit(sourceUnitName,
 				new StringReaderSourceWithURI(contents, uri, compilationUnit.getConfiguration()),
 				compilationUnit.getConfiguration(), compilationUnit.getClassLoader(),
 				compilationUnit.getErrorCollector());

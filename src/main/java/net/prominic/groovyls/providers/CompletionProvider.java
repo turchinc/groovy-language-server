@@ -83,14 +83,14 @@ public class CompletionProvider {
 			// goes terribly wrong.
 			return CompletableFuture.completedFuture(Either.forLeft(Collections.emptyList()));
 		}
+
 		URI uri = URI.create(textDocument.getUri());
 		ASTNode offsetNode = ast.getNodeAtLineAndColumn(uri, position.getLine(), position.getCharacter());
 		if (offsetNode == null) {
 			return CompletableFuture.completedFuture(Either.forLeft(Collections.emptyList()));
 		}
-		ASTNode parentNode = ast.getParent(offsetNode);
 
-		isIncomplete = false;
+		ASTNode parentNode = ast.getParent(offsetNode);		isIncomplete = false;
 		List<CompletionItem> items = new ArrayList<>();
 
 		if (offsetNode instanceof PropertyExpression) {
@@ -147,11 +147,9 @@ public class CompletionProvider {
 			return;
 		}
 		// skip the "import " at the beginning
-		importRange.setStart(new Position(importRange.getEnd().getLine(),
-				importRange.getEnd().getCharacter() - importNode.getType().getName().length()));
-		String importText = getMemberName(importNode.getType().getName(), importRange, position);
-
-		ModuleNode enclosingModule = (ModuleNode) GroovyASTUtils.getEnclosingNodeOfType(importNode, ModuleNode.class,
+			importRange.setStart(new Position(importRange.getEnd().getLine(),
+					importRange.getEnd().getCharacter() - importNode.getType().getName().length()));
+			String importText = getMemberName(importNode.getType().getName(), importRange, position);		ModuleNode enclosingModule = (ModuleNode) GroovyASTUtils.getEnclosingNodeOfType(importNode, ModuleNode.class,
 				ast);
 
 		String enclosingPackageName = enclosingModule != null ? enclosingModule.getPackageName() : null;
@@ -426,7 +424,7 @@ public class CompletionProvider {
 			}
 			String classNameWithoutPackage = classNode.getNameWithoutPackage();
 			String className = classNode.getName();
-			if (classNameWithoutPackage.startsWith(namePrefix) && !existingNames.contains(className)) {
+			if ((classNameWithoutPackage.startsWith(namePrefix) || className.startsWith(namePrefix)) && !existingNames.contains(className)) {
 				existingNames.add(className);
 				return true;
 			}
@@ -467,7 +465,7 @@ public class CompletionProvider {
 			}
 			String className = classInfo.getName();
 			String classNameWithoutPackage = classInfo.getSimpleName();
-			if (classNameWithoutPackage.startsWith(namePrefix) && !existingNames.contains(className)) {
+			if ((classNameWithoutPackage.startsWith(namePrefix) || className.startsWith(namePrefix)) && !existingNames.contains(className)) {
 				existingNames.add(className);
 				return true;
 			}

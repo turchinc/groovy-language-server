@@ -293,12 +293,36 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 		});
 		unit.iterator().forEachRemaining(sourceUnit -> {
 			URI uri = sourceUnit.getSource().getURI();
-			if (!uris.contains(uri)) {
+            
+            // Normalize URIs for comparison (handle file:// vs file:///)
+            String sourceUriString = uri.toString();
+            boolean foundMatch = false;
+            for (URI requestedUri : uris) {
+                String requestedUriString = requestedUri.toString();
+                if (sourceUriString.equals(requestedUriString) || 
+                    normalizePath(sourceUriString).equals(normalizePath(requestedUriString))) {
+                    foundMatch = true;
+                    break;
+                }
+            }
+            
+			if (!foundMatch) {
 				return;
 			}
 			visitSourceUnit(sourceUnit);
 		});
 	}
+    
+    private String normalizePath(String uriString) {
+        // Convert file:/// or file:// to a consistent format
+        // Also handle path inconsistencies
+        if (uriString.startsWith("file:///")) {
+            return "file:" + uriString.substring(7);  // Remove one /
+        } else if (uriString.startsWith("file://")) {
+            return "file:" + uriString.substring(6);
+        }
+        return uriString;
+    }
 
 	public void visitSourceUnit(SourceUnit unit) {
 		sourceUnit = unit;
@@ -317,6 +341,7 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 	public void visitModule(ModuleNode node) {
 		pushASTNode(node);
 		try {
+			visitImports(node);
 			node.getClasses().forEach(classInUnit -> {
 				visitClass(classInUnit);
 			});
